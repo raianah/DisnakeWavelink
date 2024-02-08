@@ -25,42 +25,41 @@ import asyncio
 import logging
 from typing import cast
 
-import discord
-from discord.ext import commands
+import disnake
+from disnake.ext import commands
 
-import wavelink
+import disnake_wavelink
 
 
 class Bot(commands.Bot):
     def __init__(self) -> None:
-        intents: discord.Intents = discord.Intents.default()
+        intents: disnake.Intents = disnake.Intents.default()
         intents.message_content = True
 
-        discord.utils.setup_logging(level=logging.INFO)
         super().__init__(command_prefix="?", intents=intents)
 
     async def setup_hook(self) -> None:
-        nodes = [wavelink.Node(uri="...", password="...")]
+        nodes = [disnake_wavelink.Node(uri="...", password="...")]
 
         # cache_capacity is EXPERIMENTAL. Turn it off by passing None
-        await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=100)
+        await disnake_wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=100)
 
     async def on_ready(self) -> None:
         logging.info(f"Logged in: {self.user} | {self.user.id}")
 
-    async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload) -> None:
+    async def on_wavelink_node_ready(self, payload: disnake_wavelink.NodeReadyEventPayload) -> None:
         logging.info(f"Wavelink Node connected: {payload.node!r} | Resumed: {payload.resumed}")
 
-    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
-        player: wavelink.Player | None = payload.player
+    async def on_wavelink_track_start(self, payload: disnake_wavelink.TrackStartEventPayload) -> None:
+        player: disnake_wavelink.Player | None = payload.player
         if not player:
             # Handle edge cases...
             return
 
-        original: wavelink.Playable | None = payload.original
-        track: wavelink.Playable = payload.track
+        original: disnake_wavelink.Playable | None = payload.original
+        track: disnake_wavelink.Playable = payload.track
 
-        embed: discord.Embed = discord.Embed(title="Now Playing")
+        embed: disnake.Embed = disnake.Embed(title="Now Playing")
         embed.description = f"**{track.title}** by `{track.author}`"
 
         if track.artwork:
@@ -84,16 +83,16 @@ async def play(ctx: commands.Context, *, query: str) -> None:
     if not ctx.guild:
         return
 
-    player: wavelink.Player
-    player = cast(wavelink.Player, ctx.voice_client)  # type: ignore
+    player: disnake_wavelink.Player
+    player = cast(disnake_wavelink.Player, ctx.voice_client)  # type: ignore
 
     if not player:
         try:
-            player = await ctx.author.voice.channel.connect(cls=wavelink.Player)  # type: ignore
+            player = await ctx.author.voice.channel.connect(cls=disnake_wavelink.Player)  # type: ignore
         except AttributeError:
             await ctx.send("Please join a voice channel first before using this command.")
             return
-        except discord.ClientException:
+        except disnake.ClientException:
             await ctx.send("I was unable to join this voice channel. Please try again.")
             return
 
@@ -101,7 +100,7 @@ async def play(ctx: commands.Context, *, query: str) -> None:
     # enabled = AutoPlay will play songs for us and fetch recommendations...
     # partial = AutoPlay will play songs for us, but WILL NOT fetch recommendations...
     # disabled = AutoPlay will do nothing...
-    player.autoplay = wavelink.AutoPlayMode.enabled
+    player.autoplay = disnake_wavelink.AutoPlayMode.enabled
 
     # Lock the player to this channel...
     if not hasattr(player, "home"):
@@ -114,17 +113,17 @@ async def play(ctx: commands.Context, *, query: str) -> None:
     # Seed the doc strings for more information on this method...
     # If spotify is enabled via LavaSrc, this will automatically fetch Spotify tracks if you pass a URL...
     # Defaults to YouTube for non URL based queries...
-    tracks: wavelink.Search = await wavelink.Playable.search(query)
+    tracks: disnake_wavelink.Search = await disnake_wavelink.Playable.search(query)
     if not tracks:
         await ctx.send(f"{ctx.author.mention} - Could not find any tracks with that query. Please try again.")
         return
 
-    if isinstance(tracks, wavelink.Playlist):
+    if isinstance(tracks, disnake_wavelink.Playlist):
         # tracks is a playlist...
         added: int = await player.queue.put_wait(tracks)
         await ctx.send(f"Added the playlist **`{tracks.name}`** ({added} songs) to the queue.")
     else:
-        track: wavelink.Playable = tracks[0]
+        track: disnake_wavelink.Playable = tracks[0]
         await player.queue.put_wait(track)
         await ctx.send(f"Added **`{track}`** to the queue.")
 
@@ -135,14 +134,14 @@ async def play(ctx: commands.Context, *, query: str) -> None:
     # Optionally delete the invokers message...
     try:
         await ctx.message.delete()
-    except discord.HTTPException:
+    except disnake.HTTPException:
         pass
 
 
 @bot.command()
 async def skip(ctx: commands.Context) -> None:
     """Skip the current song."""
-    player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+    player: disnake_wavelink.Player = cast(disnake_wavelink.Player, ctx.voice_client)
     if not player:
         return
 
@@ -153,11 +152,11 @@ async def skip(ctx: commands.Context) -> None:
 @bot.command()
 async def nightcore(ctx: commands.Context) -> None:
     """Set the filter to a nightcore style."""
-    player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+    player: disnake_wavelink.Player = cast(disnake_wavelink.Player, ctx.voice_client)
     if not player:
         return
 
-    filters: wavelink.Filters = player.filters
+    filters: disnake_wavelink.Filters = player.filters
     filters.timescale.set(pitch=1.2, speed=1.2, rate=1)
     await player.set_filters(filters)
 
@@ -167,7 +166,7 @@ async def nightcore(ctx: commands.Context) -> None:
 @bot.command(name="toggle", aliases=["pause", "resume"])
 async def pause_resume(ctx: commands.Context) -> None:
     """Pause or Resume the Player depending on its current state."""
-    player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+    player: disnake_wavelink.Player = cast(disnake_wavelink.Player, ctx.voice_client)
     if not player:
         return
 
@@ -178,7 +177,7 @@ async def pause_resume(ctx: commands.Context) -> None:
 @bot.command()
 async def volume(ctx: commands.Context, value: int) -> None:
     """Change the volume of the player."""
-    player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+    player: disnake_wavelink.Player = cast(disnake_wavelink.Player, ctx.voice_client)
     if not player:
         return
 
@@ -189,7 +188,7 @@ async def volume(ctx: commands.Context, value: int) -> None:
 @bot.command(aliases=["dc"])
 async def disconnect(ctx: commands.Context) -> None:
     """Disconnect the Player."""
-    player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+    player: disnake_wavelink.Player = cast(disnake_wavelink.Player, ctx.voice_client)
     if not player:
         return
 
