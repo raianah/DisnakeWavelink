@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wavelink"
+name = "disnake_wavelink"
 version = "3.2.1"
 authors = [
   { name="PythonistaGuild, EvieePy", email="evieepy@gmail.com" },
