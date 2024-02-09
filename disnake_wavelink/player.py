@@ -57,7 +57,7 @@ from .tracks import Playable, Playlist
 
 if TYPE_CHECKING:
     from disnake.types.voice import GuildVoiceState as GuildVoiceStatePayload
-    #from discord.types.voice import VoiceServerUpdate as VoiceServerUpdatePayload
+    #from disnake.types.voice import VoiceServerUpdate as VoiceServerUpdatePayload
     from typing_extensions import Self
 
     from .node import Node
@@ -586,11 +586,11 @@ class Player(disnake.VoiceProtocol):
         self._voice_state["voice"]["session_id"] = data["session_id"]
         self.channel = self.client.get_channel(int(channel_id))  # type: ignore
 
-    async def on_voice_server_update(self, data, /) -> None:
-        self._voice_state["voice"]["token"] = data["token"]
-        self._voice_state["voice"]["endpoint"] = data["endpoint"]
+    #async def on_voice_server_update(self, data: VoiceServerUpdatePayload, /) -> None:
+    #    self._voice_state["voice"]["token"] = data["token"]
+    #    self._voice_state["voice"]["endpoint"] = data["endpoint"]
 
-        await self._dispatch_voice_update()
+    #    await self._dispatch_voice_update()
 
     async def _dispatch_voice_update(self) -> None:
         assert self.guild is not None
