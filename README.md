@@ -36,7 +36,7 @@ Disnake_Wavelink features a fully asynchronous API that's intuitive and easy to 
 
 ## Getting Started
 
-**See Examples:** [Examples](https://github.com/PythonistaGuild/Wavelink/tree/main/examples)
+**See Examples:** [Examples](https://github.com/raianah/DisnakeWavelink/tree/main/examples)
 
 **Lavalink:** [GitHub](https://github.com/lavalink-devs/Lavalink/releases), [Webpage](https://lavalink.dev)
 
@@ -54,6 +54,8 @@ For support using WaveLink, please join the official [Support Server](https://di
 
 For support using Disnake, please join the official [Support Server](https://discord.gg/gJDbCw8aQy) on
 [Discord](https://discordapp.com)
+
+[![Discord Banner](https://discordapp.com/api/guilds/808030843078836254/widget.png?style=banner2)](https://discord.gg/gJDbCw8aQy)
 
 ## Installation
 
