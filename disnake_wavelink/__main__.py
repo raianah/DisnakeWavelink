@@ -5,6 +5,7 @@ import sys
 
 import disnake_wavelink
 
+
 parser = argparse.ArgumentParser(prog="wavelink")
 parser.add_argument("--version", action="store_true", help="Get version and debug information for wavelink.")
 
@@ -19,7 +20,7 @@ def get_debug_info() -> None:
 
     info: str = f"""
     wavelink: {disnake_wavelink.__version__}
-    
+
     Python:
         - {python_info}
     System:

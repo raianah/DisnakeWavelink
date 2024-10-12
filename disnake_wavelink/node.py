@@ -21,16 +21,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 import logging
 import secrets
 import urllib.parse
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 import aiohttp
-import disnake
 from disnake.utils import classproperty
 
 from . import __version__
@@ -48,7 +47,12 @@ from .payloads import *
 from .tracks import Playable, Playlist
 from .websocket import Websocket
 
+
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    import disnake
+
     from .player import Player
     from .types.request import Request, UpdateSessionRequest
     from .types.response import (
@@ -122,6 +126,9 @@ class Node:
     inactive_player_timeout: int | None
         Set the default for :attr:`wavelink.Player.inactive_timeout` on every player that connects to this node.
         Defaults to ``300``.
+    inactive_channel_tokens: int | None
+        Sets the default for :attr:`wavelink.Player.inactive_channel_tokens` on every player that connects to this node.
+        Defaults to ``3``.
 
         See also: :func:`on_wavelink_inactive_player`.
     """
@@ -138,6 +145,7 @@ class Node:
         client: disnake.Client | None = None,
         resume_timeout: int = 60,
         inactive_player_timeout: int | None = 300,
+        inactive_channel_tokens: int | None = 3,
     ) -> None:
         self._identifier = identifier or secrets.token_urlsafe(12)
         self._uri = uri.removesuffix("/")
@@ -160,11 +168,13 @@ class Node:
         self._websocket: Websocket | None = None
 
         if inactive_player_timeout and inactive_player_timeout < 10:
-            logger.warn('Setting "inactive_player_timeout" below 10 seconds may result in unwanted side effects.')
+            logger.warning('Setting "inactive_player_timeout" below 10 seconds may result in unwanted side effects.')
 
         self._inactive_player_timeout = (
             inactive_player_timeout if inactive_player_timeout and inactive_player_timeout > 0 else None
         )
+
+        self._inactive_channel_tokens = inactive_channel_tokens
 
     def __repr__(self) -> str:
         return f"Node(identifier={self.identifier}, uri={self.uri}, status={self.status}, players={len(self.players)})"
@@ -267,25 +277,36 @@ class Node:
     async def _pool_closer(self) -> None:
         try:
             await self._session.close()
-        except:
+        except Exception:
             pass
 
         if not self._has_closed:
             await self.close()
 
-    async def close(self) -> None:
+    async def close(self, eject: bool = False) -> None:
         """Method to close this Node and cleanup.
 
         After this method has finished, the event ``on_wavelink_node_closed`` will be fired.
 
         This method renders the Node websocket disconnected and disconnects all players.
+
+        Parameters
+        ----------
+        eject: bool
+            If ``True``, this will remove the Node from the Pool. Defaults to ``False``.
+
+
+        .. versionchanged:: 3.2.1
+
+            Added the ``eject`` parameter. Fixed a bug where the connected Players were not being disconnected.
         """
         disconnected: list[Player] = []
 
-        for player in self._players.values():
+        for player in self._players.copy().values():
             try:
-                await player._destroy()
-            except LavalinkException:
+                await player.disconnect()
+            except Exception as e:
+                logger.debug("An error occured while disconnecting a player in the close method of %r: %s", self, e)
                 pass
 
             disconnected.append(player)
@@ -298,6 +319,9 @@ class Node:
         self._players = {}
 
         self._has_closed = True
+
+        if eject:
+            getattr(Pool, "_Pool__nodes").pop(self.identifier, None)
 
         # Dispatch Node Closed Event... node, list of disconnected players
         if self.client is not None:
@@ -378,7 +402,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -409,7 +433,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -419,7 +443,7 @@ class Node:
 
         .. warning::
 
-            This payload is not the same as the :class:`disnake_wavelink.Player` class. This is the data received from
+            This payload is not the same as the :class:`wavelink.Player` class. This is the data received from
             Lavalink about the players.
 
 
@@ -456,7 +480,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -466,7 +490,7 @@ class Node:
 
         .. warning::
 
-            This payload is not the same as the :class:`disnake_wavelink.Player` class. This is the data received from
+            This payload is not the same as the :class:`wavelink.Player` class. This is the data received from
             Lavalink about the player. See: :meth:`~wavelink.Node.get_player`
 
 
@@ -517,7 +541,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -532,7 +556,7 @@ class Node:
             try:
                 exc_data: ErrorResponse = await resp.json()
             except Exception as e:
-                logger.warning(f"An error occured making a request on {self!r}: {e}")
+                logger.warning("An error occured making a request on %r: %s", self, e)
                 raise NodeException(status=resp.status)
 
             raise LavalinkException(data=exc_data)
@@ -549,7 +573,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -566,16 +590,14 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
 
-    async def _decode_track(self) -> TrackPayload:
-        ...
+    async def _decode_track(self) -> TrackPayload: ...
 
-    async def _decode_tracks(self) -> list[TrackPayload]:
-        ...
+    async def _decode_tracks(self) -> list[TrackPayload]: ...
 
     async def _fetch_info(self) -> InfoResponse:
         uri: str = f"{self.uri}/v4/info"
@@ -589,7 +611,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -630,7 +652,7 @@ class Node:
                 try:
                     exc_data: ErrorResponse = await resp.json()
                 except Exception as e:
-                    logger.warning(f"An error occured making a request on {self!r}: {e}")
+                    logger.warning("An error occured making a request on %r: %s", self, e)
                     raise NodeException(status=resp.status)
 
                 raise LavalinkException(data=exc_data)
@@ -669,7 +691,7 @@ class Node:
             try:
                 exc_data: ErrorResponse = await resp.json()
             except Exception as e:
-                logger.warning(f"An error occured making a request on {self!r}: {e}")
+                logger.warning("An error occured making a request on %r: %s", self, e)
                 raise NodeException(status=resp.status)
 
             raise LavalinkException(data=exc_data)
@@ -723,7 +745,7 @@ class Pool:
         All methods and attributes on this class are class level, not instance. Do not create an instance of this class.
     """
 
-    __nodes: dict[str, Node] = {}
+    __nodes: ClassVar[dict[str, Node]] = {}
     __cache: LFUCache | None = None
 
     @classmethod
@@ -774,7 +796,7 @@ class Pool:
                 continue
 
             if node.status in (NodeStatus.CONNECTING, NodeStatus.CONNECTED):
-                logger.error(f"Unable to connect {node!r} as it is already in a connecting or connected state.")
+                logger.error("Unable to connect %r as it is already in a connecting or connected state.", node)
                 continue
 
             try:
@@ -782,11 +804,11 @@ class Pool:
             except InvalidClientException as e:
                 logger.error(e)
             except AuthorizationFailedException:
-                logger.error(f"Failed to authenticate {node!r} on Lavalink with the provided password.")
+                logger.error("Failed to authenticate %r on Lavalink with the provided password.", node)
             except NodeException:
                 logger.error(
-                    f"Failed to connect to {node!r}. Check that your Lavalink major version is '4' "
-                    "and that you are trying to connect to Lavalink on the correct port."
+                    "Failed to connect to %r. Check that your Lavalink major version is '4' and that you are trying to connect to Lavalink on the correct port.",
+                    node,
                 )
             else:
                 cls.__nodes[node.identifier] = node
@@ -812,11 +834,11 @@ class Pool:
             except InvalidClientException as e:
                 logger.error(e)
             except AuthorizationFailedException:
-                logger.error(f"Failed to authenticate {node!r} on Lavalink with the provided password.")
+                logger.error("Failed to authenticate %r on Lavalink with the provided password.", node)
             except NodeException:
                 logger.error(
-                    f"Failed to connect to {node!r}. Check that your Lavalink major version is '4' "
-                    "and that you are trying to connect to Lavalink on the correct port."
+                    "Failed to connect to %r. Check that your Lavalink major version is '4' and that you are trying to connect to Lavalink on the correct port.",
+                    node,
                 )
 
         return cls.nodes
@@ -879,7 +901,7 @@ class Pool:
         return sorted(nodes, key=lambda n: n._total_player_count or len(n.players))[0]
 
     @classmethod
-    async def fetch_tracks(cls, query: str, /) -> list[Playable] | Playlist:
+    async def fetch_tracks(cls, query: str, /, *, node: Node | None = None) -> list[Playable] | Playlist:
         """Search for a list of :class:`~wavelink.Playable` or a :class:`~wavelink.Playlist`, with the given query.
 
         Parameters
@@ -887,6 +909,9 @@ class Pool:
         query: str
             The query to search tracks for. If this is not a URL based search you should provide the appropriate search
             prefix, e.g. "ytsearch:Rick Roll"
+        node: :class:`~wavelink.Node` | None
+            An optional :class:`~wavelink.Node` to use when fetching tracks. Defaults to ``None``, which selects the
+            most appropriate :class:`~wavelink.Node` automatically.
 
         Returns
         -------
@@ -907,6 +932,11 @@ class Pool:
             or an empty list if no results were found.
 
             This method no longer accepts the ``cls`` parameter.
+
+
+        .. versionadded:: 3.4.0
+
+            Added the ``node`` Keyword-Only argument.
         """
 
         # TODO: Documentation Extension for `.. positional-only::` marker.
@@ -918,8 +948,8 @@ class Pool:
             if potential:
                 return potential
 
-        node: Node = cls.get_node()
-        resp: LoadedResponse = await node._fetch_tracks(encoded_query)
+        node_: Node = node or cls.get_node()
+        resp: LoadedResponse = await node_._fetch_tracks(encoded_query)
 
         if resp["loadType"] == "track":
             track = Playable(data=resp["data"])

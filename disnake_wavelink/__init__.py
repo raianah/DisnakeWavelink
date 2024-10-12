@@ -21,21 +21,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-__title__ = "DisnakeWaveLink"
-__author__ = "PythonistaGuild, EvieePy, raianxh_"
+
+__title__ = "WaveLink"
+__author__ = "PythonistaGuild, EvieePy"
 __license__ = "MIT"
 __copyright__ = "Copyright 2019-Present (c) PythonistaGuild, EvieePy"
-__version__ = "3.2.1"
-
+__version__ = "3.5.0"
 
 from .enums import *
 from .exceptions import *
 from .filters import *
-from .lfu import CapacityZero as CapacityZero
-from .lfu import LFUCache as LFUCache
+from .lfu import CapacityZero as CapacityZero, LFUCache as LFUCache
 from .node import *
 from .payloads import *
 from .player import Player as Player
 from .queue import *
 from .tracks import *
+from .types.state import PlayerBasicState as PlayerBasicState
 from .utils import ExtrasNamespace as ExtrasNamespace

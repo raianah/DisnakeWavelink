@@ -21,13 +21,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import random
 import time
-from collections import deque
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import async_timeout
@@ -41,6 +41,7 @@ from .enums import AutoPlayMode, NodeStatus, QueueMode
 from .exceptions import (
     ChannelTimeoutException,
     InvalidChannelStateException,
+    InvalidNodeException,
     LavalinkException,
     LavalinkLoadException,
     QueueEmpty,
@@ -55,14 +56,25 @@ from .payloads import (
 from .queue import Queue
 from .tracks import Playable, Playlist
 
+
 if TYPE_CHECKING:
-    from disnake.types.voice import GuildVoiceState as GuildVoiceStatePayload
-    #from disnake.types.voice import VoiceServerUpdate as VoiceServerUpdatePayload
+    from collections import deque
+
+    from disnake.abc import Connectable
+    from disnake.types.voice import (
+        GuildVoiceState as GuildVoiceStatePayload,
+        #VoiceServerUpdate as VoiceServerUpdatePayload,
+    )
     from typing_extensions import Self
 
     from .node import Node
+    from .payloads import (
+        PlayerUpdateEventPayload,
+        TrackEndEventPayload,
+        TrackStartEventPayload,
+    )
     from .types.request import Request as RequestPayload
-    from .types.state import PlayerVoiceState, VoiceState
+    from .types.state import PlayerBasicState, PlayerVoiceState, VoiceState
 
     VocalGuildChannel = disnake.VoiceChannel | disnake.StageChannel
 
@@ -82,7 +94,7 @@ class Player(disnake.VoiceProtocol):
     .. note::
 
         Since the Player is a :class:`disnake.VoiceProtocol`, it is attached to the various ``voice_client`` attributes
-        in disnake, including ``guild.voice_client``, ``ctx.voice_client`` and ``interaction.voice_client``.
+        in disnake.py, including ``guild.voice_client``, ``ctx.voice_client`` and ``interaction.voice_client``.
 
     Attributes
     ----------
@@ -148,15 +160,43 @@ class Player(disnake.VoiceProtocol):
         self._auto_lock: asyncio.Lock = asyncio.Lock()
         self._error_count: int = 0
 
+        self._inactive_channel_limit: int | None = self._node._inactive_channel_tokens
+        self._inactive_channel_count: int = self._inactive_channel_limit if self._inactive_channel_limit else 0
+
         self._filters: Filters = Filters()
 
         # Needed for the inactivity checks...
         self._inactivity_task: asyncio.Task[bool] | None = None
         self._inactivity_wait: int | None = self._node._inactive_player_timeout
 
+        self._should_wait: int = 10
+        self._reconnecting: asyncio.Event = asyncio.Event()
+        self._reconnecting.set()
+
+    async def _disconnected_wait(self, code: int, by_remote: bool) -> None:
+        if code != 4014 or not by_remote:
+            return
+
+        self._connected = False
+
+        if self._reconnecting.is_set():
+            await asyncio.sleep(self._should_wait)
+        else:
+            await self._reconnecting.wait()
+
+        if self._connected:
+            return
+
+        await self._destroy()
+
     def _inactivity_task_callback(self, task: asyncio.Task[bool]) -> None:
-        result: bool = task.result()
-        cancelled: bool = task.cancelled()
+        cancelled: bool = False
+
+        try:
+            result: bool = task.result()
+        except asyncio.CancelledError:
+            cancelled = True
+            result = False
 
         if cancelled or result is False:
             logger.debug("Disregarding Inactivity Check Task <%s> as it was previously cancelled.", task.get_name())
@@ -205,7 +245,21 @@ class Player(disnake.VoiceProtocol):
         self._inactivity_cancel()
 
     async def _auto_play_event(self, payload: TrackEndEventPayload) -> None:
-        if self._autoplay is AutoPlayMode.disabled:
+        if not self.channel:
+            return
+
+        members: int = len([m for m in self.channel.members if not m.bot])
+        self._inactive_channel_count = (
+            self._inactive_channel_count - 1 if not members else self._inactive_channel_limit or 0
+        )
+
+        if self._inactive_channel_limit and self._inactive_channel_count <= 0:
+            self._inactive_channel_count = self._inactive_channel_limit  # Reset...
+
+            self._inactivity_cancel()
+            self.client.dispatch("wavelink_inactive_player", self)
+
+        elif self._autoplay is AutoPlayMode.disabled:
             self._inactivity_start()
             return
 
@@ -228,21 +282,22 @@ class Player(disnake.VoiceProtocol):
             self._error_count = 0
 
         if self.node.status is not NodeStatus.CONNECTED:
-            logger.warning(f'"Unable to use AutoPlay on Player for Guild "{self.guild}" due to disconnected Node.')
+            logger.warning(
+                '"Unable to use AutoPlay on Player for Guild "%s" due to disconnected Node.', str(self.guild)
+            )
             return
 
         if not isinstance(self.queue, Queue) or not isinstance(self.auto_queue, Queue):  # type: ignore
-            logger.warning(f'"Unable to use AutoPlay on Player for Guild "{self.guild}" due to unsupported Queue.')
+            logger.warning(
+                '"Unable to use AutoPlay on Player for Guild "%s" due to unsupported Queue.', str(self.guild)
+            )
             self._inactivity_start()
             return
 
         if self.queue.mode is QueueMode.loop:
             await self._do_partial(history=False)
 
-        elif self.queue.mode is QueueMode.loop_all:
-            await self._do_partial()
-
-        elif self._autoplay is AutoPlayMode.partial or self.queue:
+        elif self.queue.mode is QueueMode.loop_all or (self._autoplay is AutoPlayMode.partial or self.queue):
             await self._do_partial()
 
         elif self._autoplay is AutoPlayMode.enabled:
@@ -262,11 +317,18 @@ class Player(disnake.VoiceProtocol):
 
             await self.play(track, add_history=history)
 
-    async def _do_recommendation(self):
+    async def _do_recommendation(
+        self,
+        *,
+        populate_track: disnake_wavelink.Playable | None = None,
+        max_population: int | None = None,
+    ) -> None:
         assert self.guild is not None
         assert self.queue.history is not None and self.auto_queue.history is not None
 
-        if len(self.auto_queue) > self._auto_cutoff + 1:
+        max_population_: int = max_population if max_population else self._auto_cutoff
+
+        if len(self.auto_queue) > self._auto_cutoff + 1 and not populate_track:
             # We still do the inactivity start here since if play fails and we have no more tracks...
             # we should eventually fire the inactivity event...
             self._inactivity_start()
@@ -285,6 +347,9 @@ class Player(disnake.VoiceProtocol):
         _previous: deque[str] = self.__previous_seeds._queue  # type: ignore
         seeds: list[Playable] = [t for t in choices if t is not None and t.identifier not in _previous]
         random.shuffle(seeds)
+
+        if populate_track:
+            seeds.insert(0, populate_track)
 
         spotify: list[str] = [t.identifier for t in seeds if t.source == "spotify"]
         youtube: list[str] = [t.identifier for t in seeds if t.source == "youtube"]
@@ -331,19 +396,14 @@ class Player(disnake.VoiceProtocol):
                 return []
 
             try:
-                search: disnake_wavelink.Search = await Pool.fetch_tracks(query)
+                search: disnake_wavelink.Search = await Pool.fetch_tracks(query, node=self._node)
             except (LavalinkLoadException, LavalinkException):
                 return []
 
             if not search:
                 return []
 
-            tracks: list[Playable]
-            if isinstance(search, Playlist):
-                tracks = search.tracks.copy()
-            else:
-                tracks = search
-
+            tracks: list[Playable] = search.tracks.copy() if isinstance(search, Playlist) else search
             return tracks
 
         results: tuple[T_a, T_a] = await asyncio.gather(_search(spotify_query), _search(youtube_query))
@@ -352,7 +412,7 @@ class Player(disnake.VoiceProtocol):
         filtered_r: list[Playable] = [t for r in results for t in r]
 
         if not filtered_r and not self.auto_queue:
-            logger.info(f'Player "{self.guild.id}" could not load any songs via AutoPlay.')
+            logger.info('Player "%s" could not load any songs via AutoPlay.', self.guild.id)
             self._inactivity_start()
             return
 
@@ -371,17 +431,146 @@ class Player(disnake.VoiceProtocol):
             track._recommended = True
             added += await self.auto_queue.put_wait(track)
 
-        logger.debug(f'Player "{self.guild.id}" added "{added}" tracks to the auto_queue via AutoPlay.')
+            if added >= max_population_:
+                break
 
-        if not self._current:
+        logger.debug('Player "%s" added "%s" tracks to the auto_queue via AutoPlay.', self.guild.id, added)
+
+        if not self._current and not populate_track:
             try:
                 now: Playable = self.auto_queue.get()
                 self.auto_queue.history.put(now)
 
                 await self.play(now, add_history=False)
             except disnake_wavelink.QueueEmpty:
-                logger.info(f'Player "{self.guild.id}" could not load any songs via AutoPlay.')
+                logger.info('Player "%s" could not load any songs via AutoPlay.', self.guild.id)
                 self._inactivity_start()
+
+    @property
+    def state(self) -> PlayerBasicState:
+        """Property returning a dict of the current basic state of the player.
+
+        This property includes the ``voice_state`` received via Discord.
+
+        Returns
+        -------
+        PlayerBasicState
+
+        .. versionadded:: 3.5.0
+        """
+        data: PlayerBasicState = {
+            "voice_state": self._voice_state.copy(),
+            "position": self.position,
+            "connected": self.connected,
+            "current": self.current,
+            "paused": self.paused,
+            "volume": self.volume,
+            "filters": self.filters,
+        }
+        return data
+
+    async def switch_node(self, new_node: disnake_wavelink.Node, /) -> None:
+        """Method which attempts to switch the current node of the player.
+
+        This method initiates a live switch, and all player state will be moved from the current node to the provided
+        node.
+
+        .. warning::
+
+            Caution should be used when using this method. If this method fails, your player might be left in a stale
+            state. Consider handling cases where the player is unable to connect to the new node. To avoid stale state
+            in both wavelink and disnake.py, it is recommended to disconnect the player when a RuntimeError occurs.
+
+        Parameters
+        ----------
+        new_node: :class:`wavelink.Node`
+            A positional only argument of a :class:`wavelink.Node`, which is the new node the player will attempt to
+            switch to. This must not be the same as the current node.
+
+        Raises
+        ------
+        InvalidNodeException
+            The provided node was identical to the players current node.
+        RuntimeError
+            The player was unable to connect properly to the new node. At this point your player might be in a stale
+            state. Consider trying another node, or :meth:`disconnect` the player.
+
+
+        .. versionadded:: 3.5.0
+        """
+        assert self._guild
+
+        if new_node.identifier == self.node.identifier:
+            msg: str = f"Player '{self._guild.id}' current node is identical to the passed node: {new_node!r}"
+            raise InvalidNodeException(msg)
+
+        await self._destroy(with_invalidate=False)
+        self._node = new_node
+
+        await self._dispatch_voice_update()
+        if not self.connected:
+            raise RuntimeError(f"Switching Node on player '{self._guild.id}' failed. Failed to switch voice_state.")
+
+        self.node._players[self._guild.id] = self
+
+        if not self._current:
+            await self.set_filters(self.filters)
+            await self.set_volume(self.volume)
+            await self.pause(self.paused)
+            return
+
+        await self.play(
+            self._current,
+            replace=True,
+            start=self.position,
+            volume=self.volume,
+            filters=self.filters,
+            paused=self.paused,
+        )
+        logger.debug("Switching nodes for player: '%s' was successful. New Node: %r", self._guild.id, self.node)
+
+    @property
+    def inactive_channel_tokens(self) -> int | None:
+        """A settable property which returns the token limit as an ``int`` of the amount of tracks to play before firing
+        the :func:`on_wavelink_inactive_player` event when a channel is inactive.
+
+        This property could return ``None`` if the check has been disabled.
+
+        A channel is considered inactive when no real members (Members other than bots) are in the connected voice
+        channel. On each consecutive track played without a real member in the channel, this token bucket will reduce
+        by ``1``. After hitting ``0``, the :func:`on_wavelink_inactive_player` event will be fired and the token bucket
+        will reset to the set value. The default value for this property is ``3``.
+
+        This property can be set with any valid ``int`` or ``None``. If this property is set to ``<= 0`` or ``None``,
+        the check will be disabled.
+
+        Setting this property to ``1`` will fire the :func:`on_wavelink_inactive_player` event at the end of every track
+        if no real members are in the channel and you have not disconnected the player.
+
+        If this check successfully fires the :func:`on_wavelink_inactive_player` event, it will cancel any waiting
+        :attr:`inactive_timeout` checks until a new track is played.
+
+        The default for every player can be set on :class:`~wavelink.Node`.
+
+        - See: :class:`~wavelink.Node`
+        - See: :func:`on_wavelink_inactive_player`
+
+        .. warning::
+
+            Setting this property will reset the bucket.
+
+        .. versionadded:: 3.4.0
+        """
+        return self._inactive_channel_limit
+
+    @inactive_channel_tokens.setter
+    def inactive_channel_tokens(self, value: int | None) -> None:
+        if not value or value <= 0:
+            self._inactive_channel_limit = None
+            return
+
+        self._inactive_channel_limit = value
+        self._inactive_channel_count = value
 
     @property
     def inactive_timeout(self) -> int | None:
@@ -395,7 +584,7 @@ class Player(disnake.VoiceProtocol):
         - Pausing the player while a song is playing will not activate this countdown.
         - The countdown starts when a track ends and cancels when a track starts.
         - The countdown will not trigger until a song is played for the first time or this property is reset.
-        - The default countdown for all players is set on :class:`~disnake_wavelink.Node`.
+        - The default countdown for all players is set on :class:`~wavelink.Node`.
 
         This property can be set with a valid ``int`` of seconds to wait before dispatching the
         :func:`on_wavelink_inactive_player` event or ``None`` to remove the timeout.
@@ -408,7 +597,7 @@ class Player(disnake.VoiceProtocol):
 
         When this property is set, the timeout will reset, and all previously waiting countdowns are cancelled.
 
-        - See: :class:`~disnake_wavelink.Node`
+        - See: :class:`~wavelink.Node`
         - See: :func:`on_wavelink_inactive_player`
 
 
@@ -424,7 +613,7 @@ class Player(disnake.VoiceProtocol):
             return
 
         if value < 10:
-            logger.warn('Setting "inactive_timeout" below 10 seconds may result in unwanted side effects.')
+            logger.warning('Setting "inactive_timeout" below 10 seconds may result in unwanted side effects.')
 
         self._inactivity_wait = value
         self._inactivity_cancel()
@@ -434,21 +623,21 @@ class Player(disnake.VoiceProtocol):
 
     @property
     def autoplay(self) -> AutoPlayMode:
-        """A property which returns the :class:`disnake_wavelink.AutoPlayMode` the player is currently in.
+        """A property which returns the :class:`wavelink.AutoPlayMode` the player is currently in.
 
-        This property can be set with any :class:`disnake_wavelink.AutoPlayMode` enum value.
+        This property can be set with any :class:`wavelink.AutoPlayMode` enum value.
 
 
         .. versionchanged:: 3.0.0
 
-            This property now accepts and returns a :class:`disnake_wavelink.AutoPlayMode` enum value.
+            This property now accepts and returns a :class:`wavelink.AutoPlayMode` enum value.
         """
         return self._autoplay
 
     @autoplay.setter
     def autoplay(self, value: Any) -> None:
         if not isinstance(value, AutoPlayMode):
-            raise ValueError("Please provide a valid 'disnake_wavelink.AutoPlayMode' to set.")
+            raise ValueError("Please provide a valid 'wavelink.AutoPlayMode' to set.")
 
         self._autoplay = value
 
@@ -483,7 +672,7 @@ class Player(disnake.VoiceProtocol):
 
     @property
     def current(self) -> Playable | None:
-        """Returns the currently playing :class:`~disnake_wavelink.Playable` or None if no track is playing."""
+        """Returns the currently playing :class:`~wavelink.Playable` or None if no track is playing."""
         return self._current
 
     @property
@@ -496,9 +685,9 @@ class Player(disnake.VoiceProtocol):
 
     @property
     def filters(self) -> Filters:
-        """Property which returns the :class:`~disnake_wavelink.Filters` currently assigned to the Player.
+        """Property which returns the :class:`~wavelink.Filters` currently assigned to the Player.
 
-        See: :meth:`~disnake_wavelink.Player.set_filters` for setting the players filters.
+        See: :meth:`~wavelink.Player.set_filters` for setting the players filters.
 
         .. versionchanged:: 3.0.0
 
@@ -539,11 +728,11 @@ class Player(disnake.VoiceProtocol):
 
     @property
     def position(self) -> int:
-        """Returns the position of the currently playing :class:`~disnake_wavelink.Playable` in milliseconds.
+        """Returns the position of the currently playing :class:`~wavelink.Playable` in milliseconds.
 
         This property relies on information updates from Lavalink.
 
-        In cases there is no :class:`~disnake_wavelink.Playable` loaded or the player is not connected,
+        In cases there is no :class:`~wavelink.Playable` loaded or the player is not connected,
         this property will return ``0``.
 
         This property will return ``0`` if no update has been received from Lavalink.
@@ -586,24 +775,21 @@ class Player(disnake.VoiceProtocol):
         self._voice_state["voice"]["session_id"] = data["session_id"]
         self.channel = self.client.get_channel(int(channel_id))  # type: ignore
 
-    #async def on_voice_server_update(self, data: VoiceServerUpdatePayload, /) -> None:
-    #    self._voice_state["voice"]["token"] = data["token"]
-    #    self._voice_state["voice"]["endpoint"] = data["endpoint"]
+    # async def on_voice_server_update(self, data: VoiceServerUpdatePayload, /) -> None:
+    #     self._voice_state["voice"]["token"] = data["token"]
+    #     self._voice_state["voice"]["endpoint"] = data["endpoint"]
 
-    #    await self._dispatch_voice_update()
+    #     await self._dispatch_voice_update()
 
     async def _dispatch_voice_update(self) -> None:
         assert self.guild is not None
         data: VoiceState = self._voice_state["voice"]
 
-        try:
-            session_id: str = data["session_id"]
-            token: str = data["token"]
-        except KeyError:
-            return
-
+        session_id: str | None = data.get("session_id", None)
+        token: str | None = data.get("token", None)
         endpoint: str | None = data.get("endpoint", None)
-        if not endpoint:
+
+        if not session_id or not token or not endpoint:
             return
 
         request: RequestPayload = {"voice": {"sessionId": session_id, "token": token, "endpoint": endpoint}}
@@ -613,9 +799,10 @@ class Player(disnake.VoiceProtocol):
         except LavalinkException:
             await self.disconnect()
         else:
+            self._connected = True
             self._connection_event.set()
 
-        logger.debug(f"Player {self.guild.id} is dispatching VOICE_UPDATE.")
+        logger.debug("Player %s is dispatching VOICE_UPDATE.", self.guild.id)
 
     async def connect(
         self, *, timeout: float = 10.0, reconnect: bool, self_deaf: bool = False, self_mute: bool = False
@@ -627,7 +814,7 @@ class Player(disnake.VoiceProtocol):
             Do not use this method directly on the player. See: :meth:`disnake.VoiceChannel.connect` for more details.
 
 
-        Pass the :class:`disnake_wavelink.Player` to ``cls=`` in :meth:`disnake.VoiceChannel.connect`.
+        Pass the :class:`wavelink.Player` to ``cls=`` in :meth:`disnake.VoiceChannel.connect`.
 
 
         Raises
@@ -690,6 +877,7 @@ class Player(disnake.VoiceProtocol):
             raise InvalidChannelStateException("Player tried to move without a valid guild.")
 
         self._connection_event.clear()
+        self._reconnecting.clear()
         voice: disnake.VoiceState | None = self.guild.me.voice
 
         if self_deaf is None and voice:
@@ -704,6 +892,7 @@ class Player(disnake.VoiceProtocol):
         await self.guild.change_voice_state(channel=channel, self_mute=self_mute, self_deaf=self_deaf)
 
         if channel is None:
+            self._reconnecting.set()
             return
 
         try:
@@ -712,6 +901,8 @@ class Player(disnake.VoiceProtocol):
         except (asyncio.TimeoutError, asyncio.CancelledError):
             msg = f"Unable to connect to {channel} as it exceeded the timeout of {timeout} seconds."
             raise ChannelTimeoutException(msg)
+        finally:
+            self._reconnecting.set()
 
     async def play(
         self,
@@ -724,12 +915,14 @@ class Player(disnake.VoiceProtocol):
         paused: bool | None = None,
         add_history: bool = True,
         filters: Filters | None = None,
+        populate: bool = False,
+        max_populate: int = 5,
     ) -> Playable:
-        """Play the provided :class:`~disnake_wavelink.Playable`.
+        """Play the provided :class:`~wavelink.Playable`.
 
         Parameters
         ----------
-        track: :class:`~disnake_wavelink.Playable`
+        track: :class:`~wavelink.Playable`
             The track to being playing.
         replace: bool
             Whether this track should replace the currently playing track, if there is one. Defaults to ``True``.
@@ -750,17 +943,34 @@ class Player(disnake.VoiceProtocol):
             of the player. Defaults to ``None``.
         add_history: Optional[bool]
             If this argument is set to ``True``, the :class:`~Player` will add this track into the
-            :class:`disnake_wavelink.Queue` history, if loading the track was successful. If ``False`` this track will not be
+            :class:`wavelink.Queue` history, if loading the track was successful. If ``False`` this track will not be
             added to your history. This does not directly affect the ``AutoPlay Queue`` but will alter how ``AutoPlay``
             recommends songs in the future. Defaults to ``True``.
-        filters: Optional[:class:`~disnake_wavelink.Filters`]
-            An Optional[:class:`~disnake_wavelink.Filters`] to apply when playing this track. Defaults to ``None``.
+        filters: Optional[:class:`~wavelink.Filters`]
+            An Optional[:class:`~wavelink.Filters`] to apply when playing this track. Defaults to ``None``.
             If this is ``None`` the currently set filters on the player will be applied.
+        populate: bool
+            Whether the player should find and fill AutoQueue with recommended tracks based on the track provided.
+            Defaults to ``False``.
+
+            Populate will only search for recommended tracks when the current tracks has been accepted by Lavalink.
+            E.g. if this method does not raise an error.
+
+            You should consider when you use the ``populate`` keyword argument as populating the AutoQueue on every
+            request could potentially lead to a large amount of tracks being populated.
+        max_populate: int
+            The maximum amount of tracks that should be added to the AutoQueue when the ``populate`` keyword argument is
+            set to ``True``. This is NOT the exact amount of tracks that will be added. You should set this to a lower
+            amount to avoid the AutoQueue from being overfilled.
+
+            This argument has no effect when ``populate`` is set to ``False``.
+
+            Defaults to ``5``.
 
 
         Returns
         -------
-        :class:`~disnake_wavelink.Playable`
+        :class:`~wavelink.Playable`
             The track that began playing.
 
 
@@ -772,6 +982,11 @@ class Player(disnake.VoiceProtocol):
             Added the ``add_history`` keyword-only argument.
 
             Added the ``filters`` keyword-only argument.
+
+
+        .. versionchanged:: 3.3.0
+
+            Added the ``populate`` keyword-only argument.
         """
         assert self.guild is not None
 
@@ -787,12 +1002,9 @@ class Player(disnake.VoiceProtocol):
 
         old_previous = self._previous
         self._previous = self._current
+        self.queue._loaded = track
 
-        pause: bool
-        if paused is not None:
-            pause = paused
-        else:
-            pause = self._paused
+        pause: bool = paused if paused is not None else self._paused
 
         if filters:
             self._filters = filters
@@ -809,6 +1021,7 @@ class Player(disnake.VoiceProtocol):
         try:
             await self.node._update_player(self.guild.id, data=request, replace=replace)
         except LavalinkException as e:
+            self.queue._loaded = old_previous
             self._current = None
             self._original = None
             self._previous = old_previous
@@ -820,6 +1033,9 @@ class Player(disnake.VoiceProtocol):
         if add_history:
             assert self.queue.history is not None
             self.queue.history.put(track)
+
+        if populate:
+            await self._do_recommendation(populate_track=track, max_population=max_populate)
 
         return track
 
@@ -867,11 +1083,11 @@ class Player(disnake.VoiceProtocol):
         await self.node._update_player(self.guild.id, data=request)
 
     async def set_filters(self, filters: Filters | None = None, /, *, seek: bool = False) -> None:
-        """Set the :class:`disnake_wavelink.Filters` on the player.
+        """Set the :class:`wavelink.Filters` on the player.
 
         Parameters
         ----------
-        filters: Optional[:class:`~disnake_wavelink.Filters`]
+        filters: Optional[:class:`~wavelink.Filters`]
             The filters to set on the player. Could be ``None`` to reset the currently applied filters.
             Defaults to ``None``.
         seek: bool
@@ -882,7 +1098,7 @@ class Player(disnake.VoiceProtocol):
         .. versionchanged:: 3.0.0
 
             This method now accepts a positional-only argument of filters, which now defaults to None. Filters
-            were redesigned in this version, see: :class:`disnake_wavelink.Filters`.
+            were redesigned in this version, see: :class:`wavelink.Filters`.
 
 
         .. versionchanged:: 3.0.0
@@ -926,7 +1142,7 @@ class Player(disnake.VoiceProtocol):
         self._volume = vol
 
     async def disconnect(self, **kwargs: Any) -> None:
-        """Disconnect the player from the current voice channel and remove it from the :class:`~disnake_wavelink.Node`.
+        """Disconnect the player from the current voice channel and remove it from the :class:`~wavelink.Node`.
 
         This method will cause any playing track to stop and potentially trigger the following events:
 
@@ -961,19 +1177,19 @@ class Player(disnake.VoiceProtocol):
         Parameters
         ----------
         force: bool
-            Whether the track should skip looping, if :class:`disnake_wavelink.Queue` has been set to loop.
+            Whether the track should skip looping, if :class:`wavelink.Queue` has been set to loop.
             Defaults to ``True``.
 
         Returns
         -------
-        :class:`~disnake_wavelink.Playable` | None
+        :class:`~wavelink.Playable` | None
             The currently playing track that was skipped, or ``None`` if no track was playing.
 
 
         .. versionchanged:: 3.0.0
 
             This method was previously known as ``stop``. To avoid confusion this method is now known as ``skip``.
-            This method now returns the :class:`~disnake_wavelink.Playable` that was skipped.
+            This method now returns the :class:`~wavelink.Playable` that was skipped.
         """
         assert self.guild is not None
         old: Playable | None = self._current
@@ -996,17 +1212,19 @@ class Player(disnake.VoiceProtocol):
         except (AttributeError, KeyError):
             pass
 
-    async def _destroy(self) -> None:
+    async def _destroy(self, with_invalidate: bool = True) -> None:
         assert self.guild
 
-        self._invalidate()
+        if with_invalidate:
+            self._invalidate()
+
         player: Player | None = self.node._players.pop(self.guild.id, None)
 
         if player:
             try:
                 await self.node._destroy_player(self.guild.id)
-            except LavalinkException:
-                pass
+            except Exception as e:
+                logger.debug("Disregarding. Failed to send 'destroy_player' payload to Lavalink: %s", e)
 
     def _add_to_previous_seeds(self, seed: str) -> None:
         # Helper method to manage previous seeds.

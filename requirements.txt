@@ -2,3 +2,4 @@ aiohttp>=3.7.4,<4
 disnake>=2.8.0
 yarl>=1.9.2
 async_timeout
+typing_extensions

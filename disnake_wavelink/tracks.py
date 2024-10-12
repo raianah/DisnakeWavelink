@@ -21,9 +21,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, TypeAlias, overload
 
 import yarl
@@ -33,7 +33,11 @@ import disnake_wavelink
 from .enums import TrackSource
 from .utils import ExtrasNamespace
 
+
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from .node import Node
     from .types.tracks import (
         PlaylistInfoPayload,
         PlaylistPayload,
@@ -242,7 +246,7 @@ class Playable:
 
     @property
     def playlist(self) -> PlaylistInfo | None:
-        """Property returning a :class:`disnake_wavelink.PlaylistInfo`. Could be ``None``
+        """Property returning a :class:`wavelink.PlaylistInfo`. Could be ``None``
         if this track is not a part of a playlist.
         """
         return self._playlist
@@ -320,18 +324,20 @@ class Playable:
         return self._raw_data
 
     @classmethod
-    async def search(cls, query: str, /, *, source: TrackSource | str | None = TrackSource.YouTubeMusic) -> Search:
+    async def search(
+        cls, query: str, /, *, source: TrackSource | str | None = TrackSource.YouTubeMusic, node: Node | None = None
+    ) -> Search:
         """Search for a list of :class:`~wavelink.Playable` or a :class:`~wavelink.Playlist`, with the given query.
 
         .. note::
 
-            This method differs from :meth:`wavelink.Node.get_tracks` in that it will apply a relevant search prefix
+            This method differs from :meth:`wavelink.Pool.fetch_tracks` in that it will apply a relevant search prefix
             for you when a URL is **not** provided. This prefix can be controlled via the ``source`` keyword argument.
 
 
         .. note::
 
-            This method of searching is preferred over, :meth:`wavelink.Node.get_tracks`.
+            This method of searching is preferred over, :meth:`wavelink.Pool.fetch_tracks`.
 
 
         Parameters
@@ -347,16 +353,19 @@ class Playable:
             If ``None`` is provided, no prefix will be used, however this behaviour is default regardless of what
             is provided **when a URL is found**.
 
-            For basic searches, E.g. YouTube, YouTubeMusic and SoundCloud, see: :class:`disnake_wavelink.TrackSource`.
+            For basic searches, E.g. YouTube, YouTubeMusic and SoundCloud, see: :class:`wavelink.TrackSource`.
             Otherwise, a ``str`` may be provided for plugin based searches, E.g. "spsearch:" for the
             LavaSrc Spotify based search.
 
             Defaults to :attr:`wavelink.TrackSource.YouTubeMusic` which is equivalent to "ytmsearch:".
+        node: :class:`~wavelink.Node` | None
+            An optional :class:`~wavelink.Node` to use when searching for tracks. Defaults to ``None``, which uses
+            the :class:`~wavelink.Pool`'s automatic node selection.
 
 
         Returns
         -------
-        :class:`disnake_wavelink.Search`
+        :class:`wavelink.Search`
             A union of either list[:class:`Playable`] or :class:`Playlist`. Could return and empty list,
             if no tracks or playlist were found.
 
@@ -400,14 +409,14 @@ class Playable:
             This method has been changed significantly in version ``3.0.0``. This method has been simplified to provide
             an easier interface for searching tracks. See the above documentation and examples.
 
-            You can no longer provide a :class:`disnake_wavelink.Node` to use for searching as this method will now select the
-            most appropriate node from the :class:`disnake_wavelink.Node`.
+            You can no longer provide a :class:`wavelink.Node` to use for searching as this method will now select the
+            most appropriate node from the :class:`wavelink.Pool`.
         """
         prefix: TrackSource | str | None = _source_mapping.get(source, source)
         check = yarl.URL(query)
 
         if check.host:
-            tracks: Search = await disnake_wavelink.Pool.fetch_tracks(query)
+            tracks: Search = await disnake_wavelink.Pool.fetch_tracks(query, node=node)
             return tracks
 
         if not prefix:
@@ -416,14 +425,14 @@ class Playable:
             assert not isinstance(prefix, TrackSource)
             term: str = f"{prefix.removesuffix(':')}:{query}"
 
-        tracks: Search = await disnake_wavelink.Pool.fetch_tracks(term)
+        tracks: Search = await disnake_wavelink.Pool.fetch_tracks(term, node=node)
         return tracks
 
 
 class Playlist:
     """The wavelink Playlist container class.
 
-    This class is created and returned via both :meth:`Playable.search` and :meth:`wavelink.Node.get_tracks`.
+    This class is created and returned via both :meth:`Playable.search` and :meth:`wavelink.Pool.fetch_tracks`.
 
     It contains various information about the playlist and a list of :class:`Playable` that can be used directly in
     :meth:`wavelink.Player.play`. See below for various supported operations.
@@ -432,7 +441,7 @@ class Playlist:
     .. warning::
 
         You should not instantiate this class manually,
-        use :meth:`Playable.search` or :meth:`wavelink.Node.get_tracks` instead.
+        use :meth:`Playable.search` or :meth:`wavelink.Pool.fetch_tracks` instead.
 
 
     .. warning::
@@ -442,8 +451,8 @@ class Playlist:
 
     .. note::
 
-        This class can be directly added to :class:`disnake_wavelink.Queue` identical to :class:`Playable`. When added,
-        all tracks contained in this playlist, will be individually added to the :class:`disnake_wavelink.Queue`.
+        This class can be directly added to :class:`wavelink.Queue` identical to :class:`Playable`. When added,
+        all tracks contained in this playlist, will be individually added to the :class:`wavelink.Queue`.
 
 
     .. container:: operations
@@ -533,12 +542,10 @@ class Playlist:
         return len(self.tracks)
 
     @overload
-    def __getitem__(self, index: int) -> Playable:
-        ...
+    def __getitem__(self, index: int) -> Playable: ...
 
     @overload
-    def __getitem__(self, index: slice) -> list[Playable]:
-        ...
+    def __getitem__(self, index: slice) -> list[Playable]: ...
 
     def __getitem__(self, index: int | slice) -> Playable | list[Playable]:
         return self.tracks[index]
@@ -592,7 +599,7 @@ class Playlist:
         or a :class:`~wavelink.ExtrasNamespace`.
 
         If a dict is passed, it will be converted into an :class:`~wavelink.ExtrasNamespace`,
-        which can be converted back to a dict with dict(...). Additionally, you can also use list or tuple on
+        which can be converted back to a dict with ``dict(...)``. Additionally, you can also use list or tuple on
         :class:`~wavelink.ExtrasNamespace`.
 
         The extras dict will be sent to Lavalink as the ``userData`` field for each track in the playlist.
@@ -612,9 +619,9 @@ class Playlist:
                 playlist.extras = {"requester_id": 1234567890}
 
                 # later...
-                print(playlist.extras.requester_id)
+                print(track.extras.requester_id)
                 # or
-                print(dict(playlist.extras)["requester_id"])
+                print(dict(track.extras)["requester_id"])
 
 
         .. versionadded:: 3.2.0
@@ -629,8 +636,7 @@ class Playlist:
             self._extras = ExtrasNamespace(__value)
 
         for track in self.tracks:
-            for name, value in dict(self._extras).items():
-                setattr(track, name, value)
+            track.extras = __value
 
 
 class PlaylistInfo:
@@ -639,7 +645,7 @@ class PlaylistInfo:
     It contains various information about the playlist but **does not** contain the tracks associated with this
     playlist.
 
-    This class is used to provided information about the original :class:`disnake_wavelink.Playlist` on tracks.
+    This class is used to provided information about the original :class:`wavelink.Playlist` on tracks.
 
     Attributes
     ----------

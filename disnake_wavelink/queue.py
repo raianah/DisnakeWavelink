@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,11 +34,12 @@ from .enums import QueueMode
 from .exceptions import QueueEmpty
 from .tracks import Playable, Playlist
 
+
 __all__ = ("Queue",)
 
 
 class Queue:
-    """The default custom wavelink Queue designed specifically for :class:`disnake_wavelink.Player`.
+    """The default custom wavelink Queue designed specifically for :class:`wavelink.Player`.
 
     .. note::
 
@@ -92,7 +94,7 @@ class Queue:
 
     Attributes
     ----------
-    history: :class:`disnake_wavelink.Queue`
+    history: :class:`wavelink.Queue`
         A queue of tracks that have been added to history. Tracks are added to history when they are played.
     """
 
@@ -170,12 +172,10 @@ class Queue:
         return bool(self._items)
 
     @overload
-    def __getitem__(self, __index: SupportsIndex, /) -> Playable:
-        ...
+    def __getitem__(self, __index: SupportsIndex, /) -> Playable: ...
 
     @overload
-    def __getitem__(self, __index: slice, /) -> list[Playable]:
-        ...
+    def __getitem__(self, __index: slice, /) -> list[Playable]: ...
 
     def __getitem__(self, __index: SupportsIndex | slice, /) -> Playable | list[Playable]:
         return self._items[__index]
@@ -239,7 +239,7 @@ class Queue:
 
         Returns
         -------
-        :class:`disnake_wavelink.Playable`
+        :class:`wavelink.Playable`
             The track retrieved from the queue.
 
         Raises
@@ -285,7 +285,7 @@ class Queue:
 
         Returns
         -------
-        :class:`disnake_wavelink.Playable`
+        :class:`wavelink.Playable`
             The track retrieved from the queue.
 
         Raises
@@ -318,13 +318,13 @@ class Queue:
         ----------
         index: int
             The index to put the track at.
-        value: :class:`disnake_wavelink.Playable`
+        value: :class:`wavelink.Playable`
             The track to put.
 
         Raises
         ------
         TypeError
-            The track was not a :class:`disnake_wavelink.Playable`.
+            The track was not a :class:`wavelink.Playable`.
 
 
         .. versionadded:: 3.2.0
@@ -334,14 +334,14 @@ class Queue:
         self._wakeup_next()
 
     async def get_wait(self) -> Playable:
-        """This method returns the first :class:`disnake_wavelink.Playable` if one is present or
+        """This method returns the first :class:`wavelink.Playable` if one is present or
         waits indefinitely until one is.
 
         This method is asynchronous.
 
         Returns
         -------
-        :class:`disnake_wavelink.Playable`
+        :class:`wavelink.Playable`
             The track retrieved from the queue.
         """
 
@@ -353,7 +353,7 @@ class Queue:
 
             try:
                 await waiter
-            except:  # noqa
+            except:
                 waiter.cancel()
 
                 try:
@@ -371,11 +371,11 @@ class Queue:
     def put(self, item: list[Playable] | Playable | Playlist, /, *, atomic: bool = True) -> int:
         """Put an item into the end of the queue.
 
-        Accepts a :class:`disnake_wavelink.Playable`, :class:`disnake_wavelink.Playlist` or list[:class:`disnake_wavelink.Playble`].
+        Accepts a :class:`wavelink.Playable`, :class:`wavelink.Playlist` or list[:class:`wavelink.Playble`].
 
         Parameters
         ----------
-        item: :class:`disnake_wavelink.Playable` | :class:`disnake_wavelink.Playlist` | list[:class:`disnake_wavelink.Playble`]
+        item: :class:`wavelink.Playable` | :class:`wavelink.Playlist` | list[:class:`wavelink.Playble`]
             The item to enter into the queue.
         atomic: bool
             Whether the items should be inserted atomically. If set to ``True`` this method won't enter any tracks if
@@ -416,7 +416,7 @@ class Queue:
     async def put_wait(self, item: list[Playable] | Playable | Playlist, /, *, atomic: bool = True) -> int:
         """Put an item or items into the end of the queue asynchronously.
 
-        Accepts a :class:`disnake_wavelink.Playable` or :class:`disnake_wavelink.Playlist` or list[:class:`disnake_wavelink.Playable`].
+        Accepts a :class:`wavelink.Playable` or :class:`wavelink.Playlist` or list[:class:`wavelink.Playable`].
 
         .. note::
 
@@ -424,7 +424,7 @@ class Queue:
 
         Parameters
         ----------
-        item: :class:`disnake_wavelink.Playable` | :class:`disnake_wavelink.Playlist` | list[:class:`disnake_wavelink.Playable`]
+        item: :class:`wavelink.Playable` | :class:`wavelink.Playlist` | list[:class:`wavelink.Playable`]
             The item or items to enter into the queue.
         atomic: bool
             Whether the items should be inserted atomically. If set to ``True`` this method won't enter any tracks if
@@ -443,6 +443,7 @@ class Queue:
                 if atomic:
                     self._check_atomic(item)
                     self._items.extend(item)
+                    self._wakeup_next()
                     return len(item)
 
                 for track in item:
@@ -503,7 +504,7 @@ class Queue:
 
         Returns
         -------
-        :class:`disnake_wavelink.Playable`
+        :class:`wavelink.Playable`
             The track at the given index.
 
         Raises
@@ -554,11 +555,11 @@ class Queue:
         self[first], self[second] = self[second], self[first]
 
     def index(self, item: Playable, /) -> int:
-        """Return the index of the first occurence of a :class:`disnake_wavelink.Playable` in the queue.
+        """Return the index of the first occurence of a :class:`wavelink.Playable` in the queue.
 
         Parameters
         ----------
-        item: :class:`disnake_wavelink.Playable`
+        item: :class:`wavelink.Playable`
             The item to search the index for.
 
         Returns
@@ -620,7 +621,7 @@ class Queue:
 
         Returns
         -------
-        :class:`disnake_wavelink.Queue`
+        :class:`wavelink.Queue`
             A shallow copy of the queue.
         """
 
@@ -664,7 +665,7 @@ class Queue:
 
         Parameters
         ----------
-        item: :class:`disnake_wavelink.Playable`
+        item: :class:`wavelink.Playable`
             The item to remove from the queue.
         count: int
             The amount of times to remove the item from the queue. Defaults to ``1``.
@@ -703,18 +704,18 @@ class Queue:
         You can unload the track by setting this property to ``None`` or by using :meth:`wavelink.Player.skip` with
         ``force=True``.
 
-        Setting this property to a new :class:`disnake_wavelink.Playable` will replace the currently loaded track, but will not
+        Setting this property to a new :class:`wavelink.Playable` will replace the currently loaded track, but will not
         add it to the queue; or history until the track is played.
 
         Returns
         -------
-        :class:`disnake_wavelink.Playable` | None
+        :class:`wavelink.Playable` | None
             The currently loaded track or ``None`` if there is no track ready to repeat.
 
         Raises
         ------
         TypeError
-            The track was not a :class:`disnake_wavelink.Playable` or ``None``.
+            The track was not a :class:`wavelink.Playable` or ``None``.
 
 
         .. versionadded:: 3.2.0

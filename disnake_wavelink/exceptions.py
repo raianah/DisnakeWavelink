@@ -21,9 +21,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     from .types.response import ErrorResponse, LoadedErrorPayload
@@ -68,8 +70,8 @@ class NodeException(WavelinkException):
 
 
 class InvalidClientException(WavelinkException):
-    """Exception raised when an invalid :class:`discord.Client`
-    is provided while connecting a :class:`disnake_wavelink.Node`.
+    """Exception raised when an invalid :class:`disnake.Client`
+    is provided while connecting a :class:`wavelink.Node`.
     """
 
 
@@ -80,6 +82,8 @@ class AuthorizationFailedException(WavelinkException):
 class InvalidNodeException(WavelinkException):
     """Exception raised when a :class:`Node` is tried to be retrieved from the
     :class:`Pool` without existing, or the ``Pool`` is empty.
+
+    This exception is also raised when providing an invalid node to :meth:`~wavelink.Player.switch_node`.
     """
 
 

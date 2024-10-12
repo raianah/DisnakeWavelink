@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -31,6 +32,7 @@ import disnake_wavelink
 from .enums import DiscordVoiceCloseType
 from .filters import Filters
 from .tracks import Playable
+
 
 if TYPE_CHECKING:
     from .node import Node
@@ -51,6 +53,7 @@ __all__ = (
     "PlayerUpdateEventPayload",
     "StatsEventPayload",
     "NodeReadyEventPayload",
+    "NodeDisconnectedEventPayload",
     "StatsEventMemory",
     "StatsEventCPU",
     "StatsEventFrames",
@@ -71,7 +74,7 @@ class NodeReadyEventPayload:
 
     Attributes
     ----------
-    node: :class:`~disnake_wavelink.Node`
+    node: :class:`~wavelink.Node`
         The node that has connected or reconnected.
     resumed: bool
         Whether this node was successfully resumed.
@@ -85,17 +88,30 @@ class NodeReadyEventPayload:
         self.session_id = session_id
 
 
+class NodeDisconnectedEventPayload:
+    """Payload received in the :func:`on_wavelink_node_disconnected` event.
+
+    Attributes
+    ----------
+    node: :class:`~wavelink.Node`
+        The node that has disconnected.
+    """
+
+    def __init__(self, node: Node) -> None:
+        self.node = node
+
+
 class TrackStartEventPayload:
     """Payload received in the :func:`on_wavelink_track_start` event.
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
-    track: :class:`~disnake_wavelink.Playable`
+    track: :class:`~wavelink.Playable`
         The track received from Lavalink regarding this event.
-    original: :class:`~disnake_wavelink.Playable` | None
-        The original track associated this event. E.g. the track that was passed to :meth:`~disnake_wavelink.Player.play` or
+    original: :class:`~wavelink.Playable` | None
+        The original track associated this event. E.g. the track that was passed to :meth:`~wavelink.Player.play` or
         inserted into the queue, with all your additional attributes assigned. Could be ``None``.
     """
 
@@ -113,14 +129,14 @@ class TrackEndEventPayload:
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
-    track: :class:`~disnake_wavelink.Playable`
+    track: :class:`~wavelink.Playable`
         The track received from Lavalink regarding this event.
     reason: str
         The reason Lavalink ended this track.
-    original: :class:`~disnake_wavelink.Playable` | None
-        The original track associated this event. E.g. the track that was passed to :meth:`~disnake_wavelink.Player.play` or
+    original: :class:`~wavelink.Playable` | None
+        The original track associated this event. E.g. the track that was passed to :meth:`~wavelink.Player.play` or
         inserted into the queue, with all your additional attributes assigned. Could be ``None``.
     """
 
@@ -139,9 +155,9 @@ class TrackExceptionEventPayload:
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
-    track: :class:`~disnake_wavelink.Playable`
+    track: :class:`~wavelink.Playable`
         The track received from Lavalink regarding this event.
     exception: TrackExceptionPayload
         The exception data received via Lavalink.
@@ -158,9 +174,9 @@ class TrackStuckEventPayload:
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
-    track: :class:`~disnake_wavelink.Playable`
+    track: :class:`~wavelink.Playable`
         The track received from Lavalink regarding this event.
     threshold: int
         The Lavalink threshold associated with this event.
@@ -177,9 +193,9 @@ class WebsocketClosedEventPayload:
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
-    code: :class:`disnake_wavelink.DiscordVoiceCloseType`
+    code: :class:`wavelink.DiscordVoiceCloseType`
         The close code enum value.
     reason: str
         The reason the websocket was closed.
@@ -199,7 +215,7 @@ class PlayerUpdateEventPayload:
 
     Attributes
     ----------
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
     time: int
         Unix timestamp in milliseconds, when this event fired.
@@ -290,12 +306,12 @@ class StatsEventPayload:
         The amount of players playing a track.
     uptime: int
         The uptime of the node in milliseconds.
-    memory: :class:`disnake_wavelink.StatsEventMemory`
-        See Also: :class:`disnake_wavelink.StatsEventMemory`
-    cpu: :class:`disnake_wavelink.StatsEventCPU`
-        See Also: :class:`disnake_wavelink.StatsEventCPU`
-    frames: :class:`disnake_wavelink.StatsEventFrames` | None
-        See Also: :class:`disnake_wavelink.StatsEventFrames`. This could be ``None``.
+    memory: :class:`wavelink.StatsEventMemory`
+        See Also: :class:`wavelink.StatsEventMemory`
+    cpu: :class:`wavelink.StatsEventCPU`
+        See Also: :class:`wavelink.StatsEventCPU`
+    frames: :class:`wavelink.StatsEventFrames` | None
+        See Also: :class:`wavelink.StatsEventFrames`. This could be ``None``.
     """
 
     def __init__(self, data: StatsOP) -> None:
@@ -312,7 +328,7 @@ class StatsEventPayload:
 
 
 class StatsResponsePayload:
-    """Payload received when using :meth:`~disnake_wavelink.Node.fetch_stats`
+    """Payload received when using :meth:`~wavelink.Node.fetch_stats`
 
     Attributes
     ----------
@@ -322,12 +338,12 @@ class StatsResponsePayload:
         The amount of players playing a track.
     uptime: int
         The uptime of the node in milliseconds.
-    memory: :class:`disnake_wavelink.StatsEventMemory`
-        See Also: :class:`disnake_wavelink.StatsEventMemory`
-    cpu: :class:`disnake_wavelink.StatsEventCPU`
-        See Also: :class:`disnake_wavelink.StatsEventCPU`
-    frames: :class:`disnake_wavelink.StatsEventFrames` | None
-        See Also: :class:`disnake_wavelink.StatsEventFrames`. This could be ``None``.
+    memory: :class:`wavelink.StatsEventMemory`
+        See Also: :class:`wavelink.StatsEventMemory`
+    cpu: :class:`wavelink.StatsEventCPU`
+        See Also: :class:`wavelink.StatsEventCPU`
+    frames: :class:`wavelink.StatsEventFrames` | None
+        See Also: :class:`wavelink.StatsEventFrames`. This could be ``None``.
     """
 
     def __init__(self, data: StatsResponse) -> None:
@@ -344,8 +360,8 @@ class StatsResponsePayload:
 
 
 class PlayerStatePayload:
-    """Represents the PlayerState information received via :meth:`~disnake_wavelink.Node.fetch_player_info` or
-    :meth:`~disnake_wavelink.Node.fetch_players`
+    """Represents the PlayerState information received via :meth:`~wavelink.Node.fetch_player_info` or
+    :meth:`~wavelink.Node.fetch_players`
 
     Attributes
     ----------
@@ -367,8 +383,8 @@ class PlayerStatePayload:
 
 
 class VoiceStatePayload:
-    """Represents the VoiceState information received via :meth:`~disnake_wavelink.Node.fetch_player_info` or
-    :meth:`~disnake_wavelink.Node.fetch_players`. This is the voice state information received via Discord and sent to your
+    """Represents the VoiceState information received via :meth:`~wavelink.Node.fetch_player_info` or
+    :meth:`~wavelink.Node.fetch_players`. This is the voice state information received via Discord and sent to your
     Lavalink node.
 
     Attributes
@@ -388,24 +404,24 @@ class VoiceStatePayload:
 
 
 class PlayerResponsePayload:
-    """Payload received when using :meth:`~disnake_wavelink.Node.fetch_player_info` or :meth:`~disnake_wavelink.Node.fetch_players`
+    """Payload received when using :meth:`~wavelink.Node.fetch_player_info` or :meth:`~wavelink.Node.fetch_players`
 
     Attributes
     ----------
     guild_id: int
         The guild ID as an int that this player is connected to.
-    track: :class:`disnake_wavelink.Playable` | None
+    track: :class:`wavelink.Playable` | None
         The current track playing on Lavalink. Could be ``None`` if no track is playing.
     volume: int
         The current volume of the player.
     paused: bool
         A bool indicating whether the player is paused.
-    state: :class:`disnake_wavelink.PlayerStatePayload`
-        The current state of the player. See: :class:`disnake_wavelink.PlayerStatePayload`.
-    voice_state: :class:`disnake_wavelink.VoiceStatePayload`
-        The voice state infomration received via Discord and sent to Lavalink. See: :class:`disnake_wavelink.VoiceStatePayload`.
-    filters: :class:`disnake_wavelink.Filters`
-        The :class:`disnake_wavelink.Filters` currently associated with this player.
+    state: :class:`wavelink.PlayerStatePayload`
+        The current state of the player. See: :class:`wavelink.PlayerStatePayload`.
+    voice_state: :class:`wavelink.VoiceStatePayload`
+        The voice state infomration received via Discord and sent to Lavalink. See: :class:`wavelink.VoiceStatePayload`.
+    filters: :class:`wavelink.Filters`
+        The :class:`wavelink.Filters` currently associated with this player.
     """
 
     def __init__(self, data: PlayerResponse) -> None:
@@ -423,7 +439,7 @@ class PlayerResponsePayload:
 
 
 class GitResponsePayload:
-    """Represents Git information received via :meth:`disnake_wavelink.Node.fetch_info`
+    """Represents Git information received via :meth:`wavelink.Node.fetch_info`
 
     Attributes
     ----------
@@ -444,7 +460,7 @@ class GitResponsePayload:
 
 
 class VersionResponsePayload:
-    """Represents Version information received via :meth:`disnake_wavelink.Node.fetch_info`
+    """Represents Version information received via :meth:`wavelink.Node.fetch_info`
 
     Attributes
     ----------
@@ -472,7 +488,7 @@ class VersionResponsePayload:
 
 
 class PluginResponsePayload:
-    """Represents Plugin information received via :meth:`disnake_wavelink.Node.fetch_info`
+    """Represents Plugin information received via :meth:`wavelink.Node.fetch_info`
 
     Attributes
     ----------
@@ -488,7 +504,7 @@ class PluginResponsePayload:
 
 
 class InfoResponsePayload:
-    """Payload received when using :meth:`~disnake_wavelink.Node.fetch_info`
+    """Payload received when using :meth:`~wavelink.Node.fetch_info`
 
     Attributes
     ----------
@@ -536,9 +552,9 @@ class ExtraEventPayload:
 
     Attributes
     ----------
-    node: :class:`~disnake_wavelink.Node`
+    node: :class:`~wavelink.Node`
         The node that the event pertains to.
-    player: :class:`~disnake_wavelink.Player` | None
+    player: :class:`~wavelink.Player` | None
         The player associated with this event. Could be None.
     data: dict[str, Any]
         The raw data sent from Lavalink for this event.
